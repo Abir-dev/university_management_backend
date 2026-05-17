@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { Pool, neonConfig } from "@neondatabase/serverless";
+import { neonConfig } from "@neondatabase/serverless";
 import { PrismaNeon } from "@prisma/adapter-neon";
 import ws from "ws";
 import { PrismaClient } from "./client/index.js";
@@ -9,8 +9,10 @@ neonConfig.webSocketConstructor = ws;
 const globalForPrisma = global as unknown as { prisma: PrismaClient };
 
 const connectionString = `${process.env.DATABASE_URL}`;
-const pool = new Pool({ connectionString });
-const adapter = new PrismaNeon(pool);
+
+// In Prisma 7, the PrismaNeon adapter constructor expects a PoolConfig object,
+// not a Pool instance or a NeonQueryFunction.
+const adapter = new PrismaNeon({ connectionString });
 
 export const prisma =
   globalForPrisma.prisma ||

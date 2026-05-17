@@ -12,6 +12,7 @@ import classesRouter from "./routes/classes.js";
 import departmentsRouter from "./routes/departments.js";
 import statsRouter from "./routes/stats.js";
 import enrollmentsRouter from "./routes/enrollments.js";
+import authRouter from "./routes/auth.js";
 
 // import securityMiddleware from "./middleware/security.js";
 import { auth } from "./lib/auth.js";
@@ -39,6 +40,7 @@ app.use("/api/classes", classesRouter);
 app.use("/api/departments", departmentsRouter);
 app.use("/api/stats", statsRouter);
 app.use("/api/enrollments", enrollmentsRouter);
+app.use("/api/auth-manual", authRouter);
 
 app.get("/", (req, res) => {
   res.send("Backend server is running!");

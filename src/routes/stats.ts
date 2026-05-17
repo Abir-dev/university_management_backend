@@ -1,8 +1,5 @@
 import express from "express";
-import { desc, eq, getTableColumns, sql } from "drizzle-orm";
-
-import { db } from "../db/index.js";
-import { classes, departments, subjects, user } from "../db/schema/index.js";
+import { prisma } from "../db/index.js";
 
 const router = express.Router();
 
@@ -17,28 +14,22 @@ router.get("/overview", async (req, res) => {
       departmentsCount,
       classesCount,
     ] = await Promise.all([
-      db.select({ count: sql<number>`count(*)` }).from(user),
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(user)
-        .where(eq(user.role, "teacher")),
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(user)
-        .where(eq(user.role, "admin")),
-      db.select({ count: sql<number>`count(*)` }).from(subjects),
-      db.select({ count: sql<number>`count(*)` }).from(departments),
-      db.select({ count: sql<number>`count(*)` }).from(classes),
+      prisma.user.count(),
+      prisma.user.count({ where: { role: "teacher" } }),
+      prisma.user.count({ where: { role: "admin" } }),
+      prisma.subject.count(),
+      prisma.department.count(),
+      prisma.class.count(),
     ]);
 
     res.status(200).json({
       data: {
-        users: usersCount[0]?.count ?? 0,
-        teachers: teachersCount[0]?.count ?? 0,
-        admins: adminsCount[0]?.count ?? 0,
-        subjects: subjectsCount[0]?.count ?? 0,
-        departments: departmentsCount[0]?.count ?? 0,
-        classes: classesCount[0]?.count ?? 0,
+        users: usersCount,
+        teachers: teachersCount,
+        admins: adminsCount,
+        subjects: subjectsCount,
+        departments: departmentsCount,
+        classes: classesCount,
       },
     });
   } catch (error) {
@@ -54,27 +45,19 @@ router.get("/latest", async (req, res) => {
     const limitPerPage = Math.max(1, +limit);
 
     const [latestClasses, latestTeachers] = await Promise.all([
-      db
-        .select({
-          ...getTableColumns(classes),
-          subject: {
-            ...getTableColumns(subjects),
-          },
-          teacher: {
-            ...getTableColumns(user),
-          },
-        })
-        .from(classes)
-        .leftJoin(subjects, eq(classes.subjectId, subjects.id))
-        .leftJoin(user, eq(classes.teacherId, user.id))
-        .orderBy(desc(classes.createdAt))
-        .limit(limitPerPage),
-      db
-        .select()
-        .from(user)
-        .where(eq(user.role, "teacher"))
-        .orderBy(desc(user.createdAt))
-        .limit(limitPerPage),
+      prisma.class.findMany({
+        include: {
+          subject: true,
+          teacher: true,
+        },
+        orderBy: { createdAt: "desc" },
+        take: limitPerPage,
+      }),
+      prisma.user.findMany({
+        where: { role: "teacher" },
+        orderBy: { createdAt: "desc" },
+        take: limitPerPage,
+      }),
     ]);
 
     res.status(200).json({
@@ -92,34 +75,50 @@ router.get("/latest", async (req, res) => {
 // Aggregates for charts
 router.get("/charts", async (req, res) => {
   try {
-    const [usersByRole, subjectsByDepartment, classesBySubject] =
+    const [usersByRoleRaw, subjectsByDepartmentRaw, classesBySubjectRaw] =
       await Promise.all([
-        db
-          .select({
-            role: user.role,
-            total: sql<number>`count(*)`,
-          })
-          .from(user)
-          .groupBy(user.role),
-        db
-          .select({
-            departmentId: departments.id,
-            departmentName: departments.name,
-            totalSubjects: sql<number>`count(${subjects.id})`,
-          })
-          .from(departments)
-          .leftJoin(subjects, eq(subjects.departmentId, departments.id))
-          .groupBy(departments.id),
-        db
-          .select({
-            subjectId: subjects.id,
-            subjectName: subjects.name,
-            totalClasses: sql<number>`count(${classes.id})`,
-          })
-          .from(subjects)
-          .leftJoin(classes, eq(classes.subjectId, subjects.id))
-          .groupBy(subjects.id),
+        prisma.user.groupBy({
+          by: ["role"],
+          _count: {
+            _all: true,
+          },
+        }),
+        prisma.department.findMany({
+          select: {
+            id: true,
+            name: true,
+            _count: {
+              select: { subjects: true },
+            },
+          },
+        }),
+        prisma.subject.findMany({
+          select: {
+            id: true,
+            name: true,
+            _count: {
+              select: { classes: true },
+            },
+          },
+        }),
       ]);
+
+    const usersByRole = usersByRoleRaw.map((u) => ({
+      role: u.role,
+      total: u._count._all,
+    }));
+
+    const subjectsByDepartment = subjectsByDepartmentRaw.map((d) => ({
+      departmentId: d.id,
+      departmentName: d.name,
+      totalSubjects: d._count.subjects,
+    }));
+
+    const classesBySubject = classesBySubjectRaw.map((s) => ({
+      subjectId: s.id,
+      subjectName: s.name,
+      totalClasses: s._count.classes,
+    }));
 
     res.status(200).json({
       data: {

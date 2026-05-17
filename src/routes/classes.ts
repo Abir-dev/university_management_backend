@@ -1,8 +1,5 @@
 import express from "express";
-import { and, desc, eq, getTableColumns, ilike, or, sql } from "drizzle-orm";
-
-import { db } from "../db/index.js";
-import { classes, departments, enrollments, subjects, user } from "../db/schema/index.js";
+import { prisma, Prisma, Role } from "../db/index.js";
 
 const router = express.Router();
 
@@ -15,54 +12,40 @@ router.get("/", async (req, res) => {
     const limitPerPage = Math.max(1, +limit);
     const offset = (currentPage - 1) * limitPerPage;
 
-    const filterConditions = [];
+    const whereClause: Prisma.ClassWhereInput = {};
 
     if (search) {
-      filterConditions.push(
-        or(
-          ilike(classes.name, `%${search}%`),
-          ilike(classes.inviteCode, `%${search}%`)
-        )
-      );
+      whereClause.OR = [
+        { name: { contains: search as string, mode: "insensitive" } },
+        { inviteCode: { contains: search as string, mode: "insensitive" } },
+      ];
     }
 
     if (subject) {
-      filterConditions.push(ilike(subjects.name, `%${subject}%`));
+      whereClause.subject = {
+        name: { contains: subject as string, mode: "insensitive" },
+      };
     }
 
     if (teacher) {
-      filterConditions.push(ilike(user.name, `%${teacher}%`));
+      whereClause.teacher = {
+        name: { contains: teacher as string, mode: "insensitive" },
+      };
     }
 
-    const whereClause =
-      filterConditions.length > 0 ? and(...filterConditions) : undefined;
-
-    const countResult = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(classes)
-      .leftJoin(subjects, eq(classes.subjectId, subjects.id))
-      .leftJoin(user, eq(classes.teacherId, user.id))
-      .where(whereClause);
-
-    const totalCount = countResult[0]?.count ?? 0;
-
-    const classesList = await db
-      .select({
-        ...getTableColumns(classes),
-        subject: {
-          ...getTableColumns(subjects),
+    const [totalCount, classesList] = await prisma.$transaction([
+      prisma.class.count({ where: whereClause }),
+      prisma.class.findMany({
+        where: whereClause,
+        include: {
+          subject: true,
+          teacher: true,
         },
-        teacher: {
-          ...getTableColumns(user),
-        },
-      })
-      .from(classes)
-      .leftJoin(subjects, eq(classes.subjectId, subjects.id))
-      .leftJoin(user, eq(classes.teacherId, user.id))
-      .where(whereClause)
-      .orderBy(desc(classes.createdAt))
-      .limit(limitPerPage)
-      .offset(offset);
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: limitPerPage,
+      }),
+    ]);
 
     res.status(200).json({
       data: classesList,
@@ -92,9 +75,8 @@ router.post("/", async (req, res) => {
       bannerCldPubId,
     } = req.body;
 
-    const [createdClass] = await db
-      .insert(classes)
-      .values({
+    const createdClass = await prisma.class.create({
+      data: {
         subjectId,
         inviteCode: Math.random().toString(36).substring(2, 9),
         name,
@@ -105,10 +87,9 @@ router.post("/", async (req, res) => {
         description,
         schedules: [],
         status,
-      })
-      .returning({ id: classes.id });
-
-    if (!createdClass) throw Error;
+      },
+      select: { id: true },
+    });
 
     res.status(201).json({ data: createdClass });
   } catch (error) {
@@ -126,24 +107,17 @@ router.get("/:id", async (req, res) => {
       return res.status(400).json({ error: "Invalid class id" });
     }
 
-    const [classDetails] = await db
-      .select({
-        ...getTableColumns(classes),
+    const classDetails = await prisma.class.findUnique({
+      where: { id: classId },
+      include: {
         subject: {
-          ...getTableColumns(subjects),
+          include: {
+            department: true,
+          },
         },
-        department: {
-          ...getTableColumns(departments),
-        },
-        teacher: {
-          ...getTableColumns(user),
-        },
-      })
-      .from(classes)
-      .leftJoin(subjects, eq(classes.subjectId, subjects.id))
-      .leftJoin(departments, eq(subjects.departmentId, departments.id))
-      .leftJoin(user, eq(classes.teacherId, user.id))
-      .where(eq(classes.id, classId));
+        teacher: true,
+      },
+    });
 
     if (!classDetails) {
       return res.status(404).json({ error: "Class not found" });
@@ -174,65 +148,34 @@ router.get("/:id/users", async (req, res) => {
     const limitPerPage = Math.max(1, +limit);
     const offset = (currentPage - 1) * limitPerPage;
 
-    const baseSelect = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      emailVerified: user.emailVerified,
-      image: user.image,
-      role: user.role,
-      imageCldPubId: user.imageCldPubId,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
-    };
-
-    const groupByFields = [
-      user.id,
-      user.name,
-      user.email,
-      user.emailVerified,
-      user.image,
-      user.role,
-      user.imageCldPubId,
-      user.createdAt,
-      user.updatedAt,
-    ];
-
-    const countResult =
+    const where: Prisma.UserWhereInput =
       role === "teacher"
-        ? await db
-            .select({ count: sql<number>`count(distinct ${user.id})` })
-            .from(user)
-            .leftJoin(classes, eq(user.id, classes.teacherId))
-            .where(and(eq(user.role, role), eq(classes.id, classId)))
-        : await db
-            .select({ count: sql<number>`count(distinct ${user.id})` })
-            .from(user)
-            .leftJoin(enrollments, eq(user.id, enrollments.studentId))
-            .where(and(eq(user.role, role), eq(enrollments.classId, classId)));
+        ? {
+            role: "teacher",
+            classes: {
+              some: {
+                id: classId,
+              },
+            },
+          }
+        : {
+            role: "student",
+            enrollments: {
+              some: {
+                classId,
+              },
+            },
+          };
 
-    const totalCount = countResult[0]?.count ?? 0;
-
-    const usersList =
-      role === "teacher"
-        ? await db
-            .select(baseSelect)
-            .from(user)
-            .leftJoin(classes, eq(user.id, classes.teacherId))
-            .where(and(eq(user.role, role), eq(classes.id, classId)))
-            .groupBy(...groupByFields)
-            .orderBy(desc(user.createdAt))
-            .limit(limitPerPage)
-            .offset(offset)
-        : await db
-            .select(baseSelect)
-            .from(user)
-            .leftJoin(enrollments, eq(user.id, enrollments.studentId))
-            .where(and(eq(user.role, role), eq(enrollments.classId, classId)))
-            .groupBy(...groupByFields)
-            .orderBy(desc(user.createdAt))
-            .limit(limitPerPage)
-            .offset(offset);
+    const [totalCount, usersList] = await prisma.$transaction([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: limitPerPage,
+      }),
+    ]);
 
     res.status(200).json({
       data: usersList,

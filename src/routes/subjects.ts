@@ -1,8 +1,5 @@
 import express from "express";
-import { eq, ilike, or, and, desc, sql, getTableColumns } from "drizzle-orm";
-
-import { db } from "../db/index.js";
-import { classes, departments, enrollments, subjects, user } from "../db/schema/index.js";
+import { prisma, Prisma, Role } from "../db/index.js";
 
 const router = express.Router();
 
@@ -15,47 +12,33 @@ router.get("/", async (req, res) => {
     const limitPerPage = Math.max(1, +limit);
     const offset = (currentPage - 1) * limitPerPage;
 
-    const filterConditions = [];
+    const whereClause: Prisma.SubjectWhereInput = {};
 
     if (search) {
-      filterConditions.push(
-        or(
-          ilike(subjects.name, `%${search}%`),
-          ilike(subjects.code, `%${search}%`)
-        )
-      );
+      whereClause.OR = [
+        { name: { contains: search as string, mode: "insensitive" } },
+        { code: { contains: search as string, mode: "insensitive" } },
+      ];
     }
 
     if (department) {
-      filterConditions.push(ilike(departments.name, `%${department}%`));
+      whereClause.department = {
+        name: { contains: department as string, mode: "insensitive" },
+      };
     }
 
-    const whereClause =
-      filterConditions.length > 0 ? and(...filterConditions) : undefined;
-
-    // Count query MUST include the join
-    const countResult = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(subjects)
-      .leftJoin(departments, eq(subjects.departmentId, departments.id))
-      .where(whereClause);
-
-    const totalCount = countResult[0]?.count ?? 0;
-
-    // Data query
-    const subjectsList = await db
-      .select({
-        ...getTableColumns(subjects),
-        department: {
-          ...getTableColumns(departments),
+    const [totalCount, subjectsList] = await prisma.$transaction([
+      prisma.subject.count({ where: whereClause }),
+      prisma.subject.findMany({
+        where: whereClause,
+        include: {
+          department: true,
         },
-      })
-      .from(subjects)
-      .leftJoin(departments, eq(subjects.departmentId, departments.id))
-      .where(whereClause)
-      .orderBy(desc(subjects.createdAt))
-      .limit(limitPerPage)
-      .offset(offset);
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: limitPerPage,
+      }),
+    ]);
 
     res.status(200).json({
       data: subjectsList,
@@ -76,12 +59,10 @@ router.post("/", async (req, res) => {
   try {
     const { departmentId, name, code, description } = req.body;
 
-    const [createdSubject] = await db
-      .insert(subjects)
-      .values({ departmentId, name, code, description })
-      .returning({ id: subjects.id });
-
-    if (!createdSubject) throw Error;
+    const createdSubject = await prisma.subject.create({
+      data: { departmentId, name, code, description },
+      select: { id: true },
+    });
 
     res.status(201).json({ data: createdSubject });
   } catch (error) {
@@ -99,31 +80,26 @@ router.get("/:id", async (req, res) => {
       return res.status(400).json({ error: "Invalid subject id" });
     }
 
-    const [subject] = await db
-      .select({
-        ...getTableColumns(subjects),
-        department: {
-          ...getTableColumns(departments),
-        },
-      })
-      .from(subjects)
-      .leftJoin(departments, eq(subjects.departmentId, departments.id))
-      .where(eq(subjects.id, subjectId));
+    const subject = await prisma.subject.findUnique({
+      where: { id: subjectId },
+      include: {
+        department: true,
+      },
+    });
 
     if (!subject) {
       return res.status(404).json({ error: "Subject not found" });
     }
 
-    const classesCount = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(classes)
-      .where(eq(classes.subjectId, subjectId));
+    const classesCount = await prisma.class.count({
+      where: { subjectId },
+    });
 
     res.status(200).json({
       data: {
         subject,
         totals: {
-          classes: classesCount[0]?.count ?? 0,
+          classes: classesCount,
         },
       },
     });
@@ -147,26 +123,20 @@ router.get("/:id/classes", async (req, res) => {
     const limitPerPage = Math.max(1, +limit);
     const offset = (currentPage - 1) * limitPerPage;
 
-    const countResult = await db
-      .select({ count: sql<number>`count(*)` })
-      .from(classes)
-      .where(eq(classes.subjectId, subjectId));
-
-    const totalCount = countResult[0]?.count ?? 0;
-
-    const classesList = await db
-      .select({
-        ...getTableColumns(classes),
-        teacher: {
-          ...getTableColumns(user),
+    const [totalCount, classesList] = await prisma.$transaction([
+      prisma.class.count({
+        where: { subjectId },
+      }),
+      prisma.class.findMany({
+        where: { subjectId },
+        include: {
+          teacher: true,
         },
-      })
-      .from(classes)
-      .leftJoin(user, eq(classes.teacherId, user.id))
-      .where(eq(classes.subjectId, subjectId))
-      .orderBy(desc(classes.createdAt))
-      .limit(limitPerPage)
-      .offset(offset);
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: limitPerPage,
+      }),
+    ]);
 
     res.status(200).json({
       data: classesList,
@@ -201,67 +171,36 @@ router.get("/:id/users", async (req, res) => {
     const limitPerPage = Math.max(1, +limit);
     const offset = (currentPage - 1) * limitPerPage;
 
-    const baseSelect = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      emailVerified: user.emailVerified,
-      image: user.image,
-      role: user.role,
-      imageCldPubId: user.imageCldPubId,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
-    };
-
-    const groupByFields = [
-      user.id,
-      user.name,
-      user.email,
-      user.emailVerified,
-      user.image,
-      user.role,
-      user.imageCldPubId,
-      user.createdAt,
-      user.updatedAt,
-    ];
-
-    const countResult =
+    const where: Prisma.UserWhereInput =
       role === "teacher"
-        ? await db
-            .select({ count: sql<number>`count(distinct ${user.id})` })
-            .from(user)
-            .leftJoin(classes, eq(user.id, classes.teacherId))
-            .where(and(eq(user.role, role), eq(classes.subjectId, subjectId)))
-        : await db
-            .select({ count: sql<number>`count(distinct ${user.id})` })
-            .from(user)
-            .leftJoin(enrollments, eq(user.id, enrollments.studentId))
-            .leftJoin(classes, eq(enrollments.classId, classes.id))
-            .where(and(eq(user.role, role), eq(classes.subjectId, subjectId)));
+        ? {
+            role: "teacher",
+            classes: {
+              some: {
+                subjectId,
+              },
+            },
+          }
+        : {
+            role: "student",
+            enrollments: {
+              some: {
+                class: {
+                  subjectId,
+                },
+              },
+            },
+          };
 
-    const totalCount = countResult[0]?.count ?? 0;
-
-    const usersList =
-      role === "teacher"
-        ? await db
-            .select(baseSelect)
-            .from(user)
-            .leftJoin(classes, eq(user.id, classes.teacherId))
-            .where(and(eq(user.role, role), eq(classes.subjectId, subjectId)))
-            .groupBy(...groupByFields)
-            .orderBy(desc(user.createdAt))
-            .limit(limitPerPage)
-            .offset(offset)
-        : await db
-            .select(baseSelect)
-            .from(user)
-            .leftJoin(enrollments, eq(user.id, enrollments.studentId))
-            .leftJoin(classes, eq(enrollments.classId, classes.id))
-            .where(and(eq(user.role, role), eq(classes.subjectId, subjectId)))
-            .groupBy(...groupByFields)
-            .orderBy(desc(user.createdAt))
-            .limit(limitPerPage)
-            .offset(offset);
+    const [totalCount, usersList] = await prisma.$transaction([
+      prisma.user.count({ where }),
+      prisma.user.findMany({
+        where,
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: limitPerPage,
+      }),
+    ]);
 
     res.status(200).json({
       data: usersList,

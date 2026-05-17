@@ -1,15 +1,13 @@
 import { betterAuth } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
+import { prismaAdapter } from "better-auth/adapters/prisma";
 
-import { db } from "../db/index.js"; // your drizzle instance
-import * as schema from "../db/schema/auth.js";
+import { prisma } from "../db/index.js";
 
 export const auth = betterAuth({
   secret: process.env.BETTER_AUTH_SECRET!,
   trustedOrigins: [process.env.FRONTEND_URL!],
-  database: drizzleAdapter(db, {
-    provider: "pg",
-    schema,
+  database: prismaAdapter(prisma, {
+    provider: "postgresql",
   }),
   emailAndPassword: {
     enabled: true,

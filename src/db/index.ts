@@ -1,10 +1,25 @@
 import "dotenv/config";
-import { drizzle } from "drizzle-orm/neon-http";
-import { neon } from "@neondatabase/serverless";
+import { Pool, neonConfig } from "@neondatabase/serverless";
+import { PrismaNeon } from "@prisma/adapter-neon";
+import ws from "ws";
+import { PrismaClient } from "./client/index.js";
 
-if (!process.env.DATABASE_URL) {
-  throw new Error("DATABASE_URL is not defined");
-}
+neonConfig.webSocketConstructor = ws;
 
-const sql = neon(process.env.DATABASE_URL);
-export const db = drizzle(sql);
+const globalForPrisma = global as unknown as { prisma: PrismaClient };
+
+const connectionString = `${process.env.DATABASE_URL}`;
+const pool = new Pool({ connectionString });
+const adapter = new PrismaNeon(pool);
+
+export const prisma =
+  globalForPrisma.prisma ||
+  new PrismaClient({
+    adapter,
+    log: ["query"],
+  });
+
+if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
+
+export * from "./client/index.js";
+export default prisma;

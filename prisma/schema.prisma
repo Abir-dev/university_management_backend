@@ -1,0 +1,152 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/db/client"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  student
+  teacher
+  admin
+}
+
+enum ClassStatus {
+  active
+  inactive
+  archived
+}
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @map("email_verified")
+  image         String?
+  role          Role      @default(student)
+  imageCldPubId String?   @map("image_cld_pub_id")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  sessions      Session[]
+  accounts      Account[]
+  classes       Class[]
+  enrollments   Enrollment[]
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id
+  userId    String   @map("user_id")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  ipAddress String?  @map("ip_address")
+  userAgent String?  @map("user_agent")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id
+  userId                String    @map("user_id")
+  accountId             String    @map("account_id")
+  providerId            String    @map("provider_id")
+  accessToken           String?   @map("access_token")
+  refreshToken          String?   @map("refresh_token")
+  accessTokenExpiresAt  DateTime? @map("access_token_expires_at")
+  refreshTokenExpiresAt DateTime? @map("refresh_token_expires_at")
+  scope                 String?
+  idToken               String?   @map("id_token")
+  password              String?
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([providerId, accountId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime @map("expires_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  @@map("verification")
+}
+
+model Department {
+  id          Int       @id @default(autoincrement())
+  code        String    @unique @db.VarChar(50)
+  name        String    @db.VarChar(255)
+  description String?
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt @map("updated_at")
+
+  subjects    Subject[]
+
+  @@map("departments")
+}
+
+model Subject {
+  id           Int        @id @default(autoincrement())
+  departmentId Int        @map("department_id")
+  name         String     @db.VarChar(255)
+  code         String     @unique @db.VarChar(50)
+  description  String?
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Restrict)
+  classes      Class[]
+
+  @@map("subjects")
+}
+
+model Class {
+  id             Int         @id @default(autoincrement())
+  subjectId      Int         @map("subject_id")
+  teacherId      String      @map("teacher_id")
+  inviteCode     String      @unique @map("invite_code") @db.VarChar(50)
+  name           String      @db.VarChar(255)
+  bannerCldPubId String?     @map("banner_cld_pub_id")
+  bannerUrl      String?     @map("banner_url")
+  capacity       Int         @default(50)
+  description    String?
+  status         ClassStatus @default(active)
+  schedules      Json
+  createdAt      DateTime    @default(now()) @map("created_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
+
+  subject        Subject     @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+  teacher        User        @relation(fields: [teacherId], references: [id], onDelete: Restrict)
+  enrollments    Enrollment[]
+
+  @@map("classes")
+}
+
+model Enrollment {
+  id        Int      @id @default(autoincrement())
+  studentId String   @map("student_id")
+  classId   Int      @map("class_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+
+  @@index([studentId], name: "enrollments_student_id_idx")
+  @@index([classId], name: "enrollments_class_id_idx")
+  @@index([studentId, classId], name: "enrollments_student_class_unique")
+  @@map("enrollments")
+}

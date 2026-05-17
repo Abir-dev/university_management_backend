@@ -1,18 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { inArray } from "drizzle-orm";
-
-import { db } from "../src/db";
-import {
-  account,
-  classes,
-  departments,
-  enrollments,
-  session,
-  subjects,
-  user,
-} from "../src/db/schema";
+import { prisma } from "../src/db/index.js";
 
 type SeedUser = {
   id: string;
@@ -80,64 +69,59 @@ const ensureMapValue = <T>(map: Map<string, T>, key: string, label: string) => {
 const seed = async () => {
   const data = await loadSeedData();
 
-  await db.delete(enrollments);
-  await db.delete(classes);
-  await db.delete(subjects);
-  await db.delete(departments);
-  await db.delete(session);
-  await db.delete(account);
-  await db.delete(user);
+  // Order of deletion matters due to FK constraints
+  await prisma.enrollment.deleteMany();
+  await prisma.class.deleteMany();
+  await prisma.subject.deleteMany();
+  await prisma.department.deleteMany();
+  await prisma.session.deleteMany();
+  await prisma.account.deleteMany();
+  await prisma.user.deleteMany();
 
   if (data.users.length) {
-    await db
-      .insert(user)
-      .values(
-        data.users.map((seedUser) => ({
-          id: seedUser.id,
-          name: seedUser.name,
-          email: seedUser.email,
-          emailVerified: true,
-          image: seedUser.image,
-          role: seedUser.role,
-        }))
-      )
-      .onConflictDoNothing({ target: user.id });
+    // We create users one by one or using createMany if the provider supports it.
+    // PostgreSQL supports createMany.
+    await prisma.user.createMany({
+      data: data.users.map((seedUser) => ({
+        id: seedUser.id,
+        name: seedUser.name,
+        email: seedUser.email,
+        emailVerified: true,
+        image: seedUser.image,
+        role: seedUser.role,
+      })),
+      skipDuplicates: true,
+    });
 
-    await db
-      .insert(account)
-      .values(
-        data.users.map((seedUser) => ({
-          id: `acc_${seedUser.id}`,
-          userId: seedUser.id,
-          accountId: seedUser.email,
-          providerId: "credentials",
-          password: seedUser.password,
-        }))
-      )
-      .onConflictDoNothing({ target: [account.providerId, account.accountId] });
+    await prisma.account.createMany({
+      data: data.users.map((seedUser) => ({
+        id: `acc_${seedUser.id}`,
+        userId: seedUser.id,
+        accountId: seedUser.email,
+        providerId: "credentials",
+        password: seedUser.password,
+      })),
+      skipDuplicates: true,
+    });
   }
 
   if (data.departments.length) {
-    await db
-      .insert(departments)
-      .values(
-        data.departments.map((dept) => ({
-          code: dept.code,
-          name: dept.name,
-          description: dept.description,
-        }))
-      )
-      .onConflictDoNothing({ target: departments.code });
+    await prisma.department.createMany({
+      data: data.departments.map((dept) => ({
+        code: dept.code,
+        name: dept.name,
+        description: dept.description,
+      })),
+      skipDuplicates: true,
+    });
   }
 
-  const departmentCodes = data.departments.map((dept) => dept.code);
-  const departmentRows =
-    departmentCodes.length === 0
-      ? []
-      : await db
-          .select({ id: departments.id, code: departments.code })
-          .from(departments)
-          .where(inArray(departments.code, departmentCodes));
+  const departmentRows = await prisma.department.findMany({
+    where: {
+      code: { in: data.departments.map((dept) => dept.code) },
+    },
+    select: { id: true, code: true },
+  });
   const departmentMap = new Map(
     departmentRows.map((row) => [row.code, row.id])
   );
@@ -154,20 +138,18 @@ const seed = async () => {
       ),
     }));
 
-    await db
-      .insert(subjects)
-      .values(subjectsToInsert)
-      .onConflictDoNothing({ target: subjects.code });
+    await prisma.subject.createMany({
+      data: subjectsToInsert,
+      skipDuplicates: true,
+    });
   }
 
-  const subjectCodes = data.subjects.map((subject) => subject.code);
-  const subjectRows =
-    subjectCodes.length === 0
-      ? []
-      : await db
-          .select({ id: subjects.id, code: subjects.code })
-          .from(subjects)
-          .where(inArray(subjects.code, subjectCodes));
+  const subjectRows = await prisma.subject.findMany({
+    where: {
+      code: { in: data.subjects.map((subject) => subject.code) },
+    },
+    select: { id: true, code: true },
+  });
   const subjectMap = new Map(subjectRows.map((row) => [row.code, row.id]));
 
   if (data.classes.length) {
@@ -184,23 +166,33 @@ const seed = async () => {
       schedules: [],
     }));
 
-    await db
-      .insert(classes)
-      .values(classesToInsert)
-      .onConflictDoNothing({ target: classes.inviteCode });
+    await prisma.class.createMany({
+      data: classesToInsert as any, // Json type might need casting
+      skipDuplicates: true,
+    });
   }
 
-  const classInviteCodes = data.classes.map(
-    (classItem) => classItem.inviteCode
-  );
-  const classRows =
-    classInviteCodes.length === 0
-      ? []
-      : await db
-          .select({ id: classes.id, inviteCode: classes.inviteCode })
-          .from(classes)
-          .where(inArray(classes.inviteCode, classInviteCodes));
+  const classRows = await prisma.class.findMany({
+    where: {
+      inviteCode: { in: data.classes.map((classItem) => classItem.inviteCode) },
+    },
+    select: { id: true, inviteCode: true },
+  });
   const classMap = new Map(classRows.map((row) => [row.inviteCode, row.id]));
+
+  if (data.enrollments.length) {
+    await prisma.enrollment.createMany({
+      data: data.enrollments.map((enrollment) => ({
+        classId: ensureMapValue(
+          classMap,
+          enrollment.classInviteCode,
+          "class"
+        ),
+        studentId: enrollment.studentId,
+      })),
+      skipDuplicates: true,
+    });
+  }
 };
 
 seed()

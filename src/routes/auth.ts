@@ -98,7 +98,7 @@ router.post("/join", async (req, res) => {
         data: {
           id: nanoid(),
           userId: u.id,
-          providerId: "credentials",
+          providerId: "credential",
           accountId: email,
           password: hashedPassword,
         },
@@ -162,6 +162,67 @@ router.get("/verify-invite", async (req, res) => {
   }
 });
 
+// Registration (Manual Auth)
+router.post("/register", async (req, res) => {
+  try {
+    const { email, password, name, role } = req.body;
+
+    if (!email || !password || !name) {
+      return res.status(400).json({ error: "Email, password, and name are required" });
+    }
+
+    // Check if user already exists
+    const existingUser = await prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existingUser) {
+      return res.status(409).json({ error: "User already exists" });
+    }
+
+    // Hash password
+    const hashedPassword = await argon2.hash(password);
+
+    // Create user and credentials in a transaction
+    const newUser = await prisma.$transaction(async (tx) => {
+      const u = await tx.user.create({
+        data: {
+          id: nanoid(),
+          name,
+          email,
+          emailVerified: true, // Auto-verify for manual registration
+          role: (role as Role) || "student",
+        },
+      });
+
+      await tx.account.create({
+        data: {
+          id: nanoid(),
+          userId: u.id,
+          providerId: "credential",
+          accountId: email,
+          password: hashedPassword,
+        },
+      });
+
+      return u;
+    });
+
+    res.status(201).json({
+      message: "User registered successfully",
+      data: {
+        id: newUser.id,
+        name: newUser.name,
+        email: newUser.email,
+        role: newUser.role,
+      },
+    });
+  } catch (error) {
+    console.error("Registration error:", error);
+    res.status(500).json({ error: "Failed to register user" });
+  }
+});
+
 // Login (Manual Auth)
 router.post("/login", async (req, res) => {
   try {
@@ -176,7 +237,7 @@ router.post("/login", async (req, res) => {
       where: { email },
       include: {
         accounts: {
-          where: { providerId: "credentials" },
+          where: { providerId: "credential" },
         },
       },
     });
@@ -242,7 +303,7 @@ router.post("/admin/login", async (req, res) => {
       where: { email },
       include: {
         accounts: {
-          where: { providerId: "credentials" },
+          where: { providerId: "credential" },
         },
       },
     });

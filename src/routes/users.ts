@@ -1,10 +1,11 @@
 import express from "express";
 import { prisma, Role, Prisma } from "../db/index.js";
+import { authMiddleware, isAdmin } from "../middleware/auth.js";
 
 const router = express.Router();
 
 // Get all users with optional search, role filter, and pagination
-router.get("/", async (req, res) => {
+router.get("/", authMiddleware, isAdmin, async (req, res) => {
   try {
     const { search, role, page = 1, limit = 10 } = req.query;
 
@@ -51,9 +52,14 @@ router.get("/", async (req, res) => {
 });
 
 // Get user details with role-specific data
-router.get("/:id", async (req, res) => {
+router.get("/:id", authMiddleware, async (req, res) => {
   try {
-    const userId = req.params.id;
+    const userId = req.params.id as string;
+
+    // Users can only view their own details unless they are admins
+    if (req.user?.id !== userId && req.user?.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden: You can only access your own profile" });
+    }
 
     const userRecord = await prisma.user.findUnique({
       where: { id: userId },
@@ -71,9 +77,15 @@ router.get("/:id", async (req, res) => {
 });
 
 // List departments associated with a user
-router.get("/:id/departments", async (req, res) => {
+router.get("/:id/departments", authMiddleware, async (req, res) => {
   try {
-    const userId = req.params.id;
+    const userId = req.params.id as string;
+
+    // Users can only view their own associated data unless they are admins
+    if (req.user?.id !== userId && req.user?.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden: You can only access your own data" });
+    }
+
     const { page = 1, limit = 10 } = req.query;
 
     const userRecord = await prisma.user.findUnique({
@@ -101,34 +113,36 @@ router.get("/:id/departments", async (req, res) => {
     const limitPerPage = Math.max(1, +limit);
     const offset = (currentPage - 1) * limitPerPage;
 
-    const where: Prisma.DepartmentWhereInput =
-      userRecord.role === "teacher"
-        ? {
-            subjects: {
+    let where: Prisma.DepartmentWhereInput;
+    if (userRecord.role === "teacher") {
+      where = {
+        subjects: {
+          some: {
+            classes: {
               some: {
-                classes: {
+                teacherId: userId,
+              },
+            },
+          },
+        },
+      };
+    } else {
+      where = {
+        subjects: {
+          some: {
+            classes: {
+              some: {
+                enrollments: {
                   some: {
-                    teacherId: userId,
+                    studentId: userId,
                   },
                 },
               },
             },
-          }
-        : {
-            subjects: {
-              some: {
-                classes: {
-                  some: {
-                    enrollments: {
-                      some: {
-                        studentId: userId,
-                      },
-                    },
-                  },
-                },
-              },
-            },
-          };
+          },
+        },
+      };
+    }
 
     const [totalCount, departmentsList] = await prisma.$transaction([
       prisma.department.count({ where }),
@@ -156,9 +170,15 @@ router.get("/:id/departments", async (req, res) => {
 });
 
 // List subjects associated with a user
-router.get("/:id/subjects", async (req, res) => {
+router.get("/:id/subjects", authMiddleware, async (req, res) => {
   try {
-    const userId = req.params.id;
+    const userId = req.params.id as string;
+
+    // Users can only view their own associated data unless they are admins
+    if (req.user?.id !== userId && req.user?.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden: You can only access your own data" });
+    }
+
     const { page = 1, limit = 10 } = req.query;
 
     const userRecord = await prisma.user.findUnique({
@@ -186,26 +206,28 @@ router.get("/:id/subjects", async (req, res) => {
     const limitPerPage = Math.max(1, +limit);
     const offset = (currentPage - 1) * limitPerPage;
 
-    const where: Prisma.SubjectWhereInput =
-      userRecord.role === "teacher"
-        ? {
-            classes: {
+    let where: Prisma.SubjectWhereInput;
+    if (userRecord.role === "teacher") {
+      where = {
+        classes: {
+          some: {
+            teacherId: userId,
+          },
+        },
+      };
+    } else {
+      where = {
+        classes: {
+          some: {
+            enrollments: {
               some: {
-                teacherId: userId,
+                studentId: userId,
               },
             },
-          }
-        : {
-            classes: {
-              some: {
-                enrollments: {
-                  some: {
-                    studentId: userId,
-                  },
-                },
-              },
-            },
-          };
+          },
+        },
+      };
+    }
 
     const [totalCount, subjectsList] = await prisma.$transaction([
       prisma.subject.count({ where }),

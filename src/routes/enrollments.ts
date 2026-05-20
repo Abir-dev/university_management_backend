@@ -1,5 +1,6 @@
 import express from "express";
 import { prisma } from "../db/index.js";
+import { authMiddleware, isAdmin, isStudent } from "../middleware/auth.js";
 
 const router = express.Router();
 
@@ -23,8 +24,8 @@ const getEnrollmentDetails = async (enrollmentId: number) => {
   return enrollment;
 };
 
-// Create enrollment
-router.post("/", async (req, res) => {
+// Create enrollment (Manual by Admin)
+router.post("/", authMiddleware, isAdmin, async (req, res) => {
   try {
     const { classId, studentId } = req.body;
 
@@ -72,15 +73,26 @@ router.post("/", async (req, res) => {
   }
 });
 
-// Join class by invite code
-router.post("/join", async (req, res) => {
+// Join class by invite code (By Student)
+router.post("/join", authMiddleware, isStudent, async (req, res) => {
   try {
-    const { inviteCode, studentId } = req.body;
+    const { inviteCode } = req.body;
+    let { studentId } = req.body;
+
+    // If user is a student, they can only enroll themselves
+    if (req.user?.role === "student") {
+      studentId = req.user.id;
+    }
 
     if (!inviteCode || !studentId) {
       return res
         .status(400)
         .json({ error: "inviteCode and studentId are required" });
+    }
+
+    // Security check: Admins can enroll anyone, but students can only enroll themselves
+    if (req.user?.role !== "admin" && req.user?.id !== studentId) {
+      return res.status(403).json({ error: "Forbidden: You can only enroll yourself" });
     }
 
     const classRecord = await prisma.class.findUnique({

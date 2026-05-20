@@ -1,10 +1,11 @@
 import express from "express";
 import { prisma, Role, Prisma } from "../db/index.js";
+import { authMiddleware, isAdmin } from "../middleware/auth.js";
 
 const router = express.Router();
 
 // Get all departments with optional search and pagination
-router.get("/", async (req, res) => {
+router.get("/", authMiddleware, async (req, res) => {
   try {
     const { search, page = 1, limit = 10 } = req.query;
 
@@ -56,7 +57,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", authMiddleware, isAdmin, async (req, res) => {
   try {
     const { code, name, description } = req.body;
 
@@ -73,7 +74,7 @@ router.post("/", async (req, res) => {
 });
 
 // Get department details with counts
-router.get("/:id", async (req, res) => {
+router.get("/:id", authMiddleware, async (req, res) => {
   try {
     const departmentId = Number(req.params.id);
 
@@ -130,7 +131,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // List subjects in a department with pagination
-router.get("/:id/subjects", async (req, res) => {
+router.get("/:id/subjects", authMiddleware, async (req, res) => {
   try {
     const departmentId = Number(req.params.id);
     const { page = 1, limit = 10 } = req.query;
@@ -171,7 +172,7 @@ router.get("/:id/subjects", async (req, res) => {
 });
 
 // List classes in a department with pagination
-router.get("/:id/classes", async (req, res) => {
+router.get("/:id/classes", authMiddleware, async (req, res) => {
   try {
     const departmentId = Number(req.params.id);
     const { page = 1, limit = 10 } = req.query;
@@ -218,7 +219,7 @@ router.get("/:id/classes", async (req, res) => {
 });
 
 // List users in a department by role with pagination
-router.get("/:id/users", async (req, res) => {
+router.get("/:id/users", authMiddleware, async (req, res) => {
   try {
     const departmentId = Number(req.params.id);
     const { role, page = 1, limit = 10 } = req.query;

@@ -1,10 +1,11 @@
 import express from "express";
 import { prisma, Prisma, Role } from "../db/index.js";
+import { authMiddleware, isTeacher } from "../middleware/auth.js";
 
 const router = express.Router();
 
 // Get all classes with optional search, subject, teacher filters, and pagination
-router.get("/", async (req, res) => {
+router.get("/", authMiddleware, async (req, res) => {
   try {
     const { search, subject, teacher, page = 1, limit = 10 } = req.query;
 
@@ -62,7 +63,7 @@ router.get("/", async (req, res) => {
   }
 });
 
-router.post("/", async (req, res) => {
+router.post("/", authMiddleware, isTeacher, async (req, res) => {
   try {
     const {
       name,
@@ -74,6 +75,11 @@ router.post("/", async (req, res) => {
       bannerUrl,
       bannerCldPubId,
     } = req.body;
+
+    // Teachers can only create classes for themselves unless they are admins
+    if (req.user?.id !== teacherId && req.user?.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden: You can only create classes for yourself" });
+    }
 
     const createdClass = await prisma.class.create({
       data: {
@@ -99,7 +105,7 @@ router.post("/", async (req, res) => {
 });
 
 // Get class details with counts
-router.get("/:id", async (req, res) => {
+router.get("/:id", authMiddleware, async (req, res) => {
   try {
     const classId = Number(req.params.id);
 
@@ -131,7 +137,7 @@ router.get("/:id", async (req, res) => {
 });
 
 // List users in a class by role with pagination
-router.get("/:id/users", async (req, res) => {
+router.get("/:id/users", authMiddleware, async (req, res) => {
   try {
     const classId = Number(req.params.id);
     const { role, page = 1, limit = 10 } = req.query;

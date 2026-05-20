@@ -14,6 +14,11 @@ router.post("/signup", async (req, res) => {
       return res.status(400).json({ error: "Name, email and password are required" });
     }
 
+    // Prevent unauthorized admin/teacher registration
+    if (role === "admin") {
+      return res.status(403).json({ error: "Forbidden: Cannot register as admin" });
+    }
+
     // Check if user already exists
     const existingUser = await prisma.user.findUnique({
       where: { email },
@@ -129,6 +134,72 @@ router.post("/login", async (req, res) => {
   } catch (error) {
     console.error("Login error:", error);
     res.status(500).json({ error: "Failed to login" });
+  }
+});
+
+// Admin Login
+router.post("/admin/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({ error: "Email and password are required" });
+    }
+
+    // Find user and their credentials
+    const user = await prisma.user.findUnique({
+      where: { email },
+      include: {
+        accounts: {
+          where: { providerId: "credentials" },
+        },
+      },
+    });
+
+    if (!user || user.role !== "admin" || !user.accounts[0] || !user.accounts[0].password) {
+      return res.status(401).json({ error: "Invalid admin credentials" });
+    }
+
+    // Verify password
+    const validPassword = await argon2.verify(user.accounts[0].password, password);
+
+    if (!validPassword) {
+      return res.status(401).json({ error: "Invalid admin credentials" });
+    }
+
+    // Create session
+    const token = nanoid(32);
+    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000); // 30 days
+
+    const session = await prisma.session.create({
+      data: {
+        id: nanoid(),
+        userId: user.id,
+        token,
+        expiresAt,
+        ipAddress: req.ip ?? null,
+        userAgent: req.headers["user-agent"] ?? null,
+      },
+    });
+
+    res.status(200).json({
+      message: "Admin logged in successfully",
+      data: {
+        user: {
+          id: user.id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+        },
+        session: {
+          token: session.token,
+          expiresAt: session.expiresAt,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Admin login error:", error);
+    res.status(500).json({ error: "Failed to login as admin" });
   }
 });
 

@@ -1,7 +1,11 @@
 import express from "express";
 import { prisma } from "../db/index.js";
+import { authMiddleware, isAdmin } from "../middleware/auth.js";
 
 const router = express.Router();
+
+// Apply admin middleware to all stats routes
+router.use(authMiddleware, isAdmin);
 
 // Overview counts for core entities
 router.get("/overview", async (req, res) => {

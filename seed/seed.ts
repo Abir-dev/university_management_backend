@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import argon2 from "argon2";
 import { prisma } from "../src/db/index.js";
 
 type SeedUser = {
@@ -79,8 +80,6 @@ const seed = async () => {
   await prisma.user.deleteMany();
 
   if (data.users.length) {
-    // We create users one by one or using createMany if the provider supports it.
-    // PostgreSQL supports createMany.
     await prisma.user.createMany({
       data: data.users.map((seedUser) => ({
         id: seedUser.id,
@@ -93,14 +92,19 @@ const seed = async () => {
       skipDuplicates: true,
     });
 
-    await prisma.account.createMany({
-      data: data.users.map((seedUser) => ({
+    // Hash passwords for all users
+    const accountData = await Promise.all(
+      data.users.map(async (seedUser) => ({
         id: `acc_${seedUser.id}`,
         userId: seedUser.id,
         accountId: seedUser.email,
         providerId: "credentials",
-        password: seedUser.password,
-      })),
+        password: await argon2.hash(seedUser.password),
+      }))
+    );
+
+    await prisma.account.createMany({
+      data: accountData,
       skipDuplicates: true,
     });
   }

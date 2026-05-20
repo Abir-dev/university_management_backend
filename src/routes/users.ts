@@ -5,7 +5,7 @@ import { authMiddleware, isAdmin } from "../middleware/auth.js";
 const router = express.Router();
 
 // Get all users with optional search, role filter, and pagination
-router.get("/", authMiddleware, isAdmin, async (req, res) => {
+router.get("/", authMiddleware, async (req, res) => {
   try {
     const { search, role, page = 1, limit = 10 } = req.query;
 
@@ -15,15 +15,18 @@ router.get("/", authMiddleware, isAdmin, async (req, res) => {
 
     const whereClause: Prisma.UserWhereInput = {};
 
+    // Non-admins can only see teachers (Faculty)
+    if (req.user?.role !== "admin") {
+      whereClause.role = "teacher";
+    } else if (role) {
+      whereClause.role = role as Role;
+    }
+
     if (search) {
       whereClause.OR = [
         { name: { contains: search as string, mode: "insensitive" } },
         { email: { contains: search as string, mode: "insensitive" } },
       ];
-    }
-
-    if (role) {
-      whereClause.role = role as Role;
     }
 
     const [totalCount, usersList] = await prisma.$transaction([

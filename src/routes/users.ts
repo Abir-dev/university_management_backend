@@ -260,4 +260,89 @@ router.get("/:id/subjects", authMiddleware, async (req, res) => {
   }
 });
 
+// List classes associated with a user
+router.get("/:id/classes", authMiddleware, async (req, res) => {
+  try {
+    const userId = req.params.id as string;
+
+    // Users can only view their own associated data unless they are admins
+    if (req.user?.id !== userId && req.user?.role !== "admin") {
+      return res.status(403).json({ error: "Forbidden: You can only access your own data" });
+    }
+
+    const { page = 1, limit = 10 } = req.query;
+
+    const userRecord = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, role: true },
+    });
+
+    if (!userRecord) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (userRecord.role !== "teacher" && userRecord.role !== "student") {
+      return res.status(200).json({
+        data: [],
+        pagination: {
+          page: 1,
+          limit: 0,
+          total: 0,
+          totalPages: 0,
+        },
+      });
+    }
+
+    const currentPage = Math.max(1, +page);
+    const limitPerPage = Math.max(1, +limit);
+    const offset = (currentPage - 1) * limitPerPage;
+
+    let where: Prisma.ClassWhereInput;
+    if (userRecord.role === "teacher") {
+      where = {
+        teacherId: userId,
+      };
+    } else {
+      where = {
+        enrollments: {
+          some: {
+            studentId: userId,
+          },
+        },
+      };
+    }
+
+    const [totalCount, classesList] = await prisma.$transaction([
+      prisma.class.count({ where }),
+      prisma.class.findMany({
+        where,
+        include: {
+          subject: {
+            include: {
+              department: true,
+            }
+          },
+          teacher: true,
+        },
+        orderBy: { createdAt: "desc" },
+        skip: offset,
+        take: limitPerPage,
+      }),
+    ]);
+
+    res.status(200).json({
+      data: classesList,
+      pagination: {
+        page: currentPage,
+        limit: limitPerPage,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / limitPerPage),
+      },
+    });
+  } catch (error) {
+    console.error("GET /users/:id/classes error:", error);
+    res.status(500).json({ error: "Failed to fetch user classes" });
+  }
+});
+
 export default router;
